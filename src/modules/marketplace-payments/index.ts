@@ -1,0 +1,1 @@
+export { marketplacePaymentsRouter } from './route';

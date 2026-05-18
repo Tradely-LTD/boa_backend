@@ -1,0 +1,1 @@
+export { marketplaceUploadsRouter } from './route';

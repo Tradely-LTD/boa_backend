@@ -1,0 +1,1 @@
+export { marketplaceBuyersRouter } from './route';

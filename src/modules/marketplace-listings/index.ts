@@ -1,0 +1,1 @@
+export { marketplaceListingsRouter } from './route';
