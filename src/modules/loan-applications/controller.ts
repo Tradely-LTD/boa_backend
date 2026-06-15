@@ -245,13 +245,15 @@ export const createLoanPublic = async (req: Request, res: Response) => {
         commodity:           loan.commodity,
         quantityKg:          loan.quantityKg,
         receiptCount:        loan.receiptCount,
+        receiptNumbers:      receipts.map(r => r.receiptNumber),
         centreName:          loan.centreName,
         loanAmountRequested: loan.loanAmountRequested,
         status:              loan.status,
         createdAt:           loan.createdAt,
       },
     });
-  } catch {
+  } catch (err: any) {
+    console.error('[loan-public] createLoanPublic error:', err?.message ?? err);
     return res.status(500).json({ success: false, message: 'Internal server error. Please try again.' });
   }
 };
