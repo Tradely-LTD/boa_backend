@@ -102,8 +102,9 @@ export const createShop = async (req: Request, res: Response) => {
 
     return res.status(201).json({ success: true, data: { ...shop, ownerUser } });
   } catch (err: any) {
+    console.error('[shops] createShop error:', err?.message ?? err);
     if (err?.code === '23505') return res.status(409).json({ success: false, message: 'Email already registered.' });
-    return res.status(500).json({ success: false, message: 'Internal server error.' });
+    return res.status(500).json({ success: false, message: err?.message ?? 'Internal server error.' });
   }
 };
 

@@ -13,8 +13,9 @@ export const listPrices = async (req: Request, res: Response) => {
       .orderBy(commodityPricesTable.commodity, desc(commodityPricesTable.updatedAt));
 
     return res.json({ success: true, data: rows });
-  } catch {
-    return res.status(500).json({ success: false, message: 'Internal server error.' });
+  } catch (err: any) {
+    console.error('[commodity-prices] listPrices error:', err?.message ?? err);
+    return res.status(500).json({ success: false, message: err?.message ?? 'Internal server error.' });
   }
 };
 
@@ -87,8 +88,9 @@ export const upsertPrice = async (req: Request, res: Response) => {
     }).returning();
 
     return res.status(201).json({ success: true, data: created });
-  } catch {
-    return res.status(500).json({ success: false, message: 'Internal server error.' });
+  } catch (err: any) {
+    console.error('[commodity-prices] upsertPrice error:', err?.message ?? err);
+    return res.status(500).json({ success: false, message: err?.message ?? 'Internal server error.' });
   }
 };
 
