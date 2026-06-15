@@ -24,6 +24,8 @@ import { marketplaceOrdersRouter }       from './modules/marketplace-orders';
 import { marketplacePaymentsRouter }     from './modules/marketplace-payments';
 import { marketplaceUploadsRouter }      from './modules/marketplace-uploads';
 import { mechanizationRouter }           from './modules/mechanization';
+import commodityPricesRouter             from './modules/commodity-prices/index';
+import shopsRouter                       from './modules/shops/index';
 
 const app  = express();
 const PORT = process.env.PORT ?? 4000;
@@ -63,6 +65,8 @@ app.use('/api/suppliers',           suppliersRouter);
 app.use('/api/farm-inputs',         farmInputsRouter);
 app.use('/api/collection-requests',       collectionRequestsRouter);
 app.use('/api/mechanization',             mechanizationRouter);
+app.use('/api',                           commodityPricesRouter);
+app.use('/api',                           shopsRouter);
 
 // ── Marketplace ────────────────────────────────────────────────────────────────
 app.use('/api/marketplace/listings',      marketplaceListingsRouter);

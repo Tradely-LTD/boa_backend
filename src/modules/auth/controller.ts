@@ -28,13 +28,17 @@ export const login = async (req: Request<{}, {}, LoginBody>, res: Response) => {
     if (!valid)
       return res.status(401).json({ success: false, message: 'Invalid credentials.' });
 
-    const token = signToken({ userId: user.id, email: user.email, role: user.role, centreId: user.centreId ?? undefined });
+    const token = signToken({
+      userId: user.id, email: user.email, role: user.role,
+      centreId: user.centreId ?? undefined,
+      shopId:   (user as any).shopId ?? undefined,
+    });
 
     return res.json({
       success: true,
       data: {
         token,
-        user: { id: user.id, email: user.email, name: user.name, role: user.role, centreId: user.centreId },
+        user: { id: user.id, userId: user.id, email: user.email, name: user.name, role: user.role, centreId: user.centreId, shopId: (user as any).shopId ?? null },
       },
     });
   } catch (err) {

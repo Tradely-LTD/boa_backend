@@ -19,6 +19,9 @@ import * as marketplacePaymentsSchema from './schemas/marketplacePaymentsSchema'
 import * as tractorsSchema            from './schemas/tractorsSchema';
 import * as mechHireRequestsSchema    from './schemas/mechHireRequestsSchema';
 import * as mechDeploymentsSchema     from './schemas/mechDeploymentsSchema';
+import * as commodityPricesSchema     from './schemas/commodityPricesSchema';
+import * as loanReceiptPledgesSchema  from './schemas/loanReceiptPledgesSchema';
+import * as shopsSchema               from './schemas/shopsSchema';
 
 const DATABASE_URL = process.env.DATABASE_URL;
 if (!DATABASE_URL) throw new Error('DATABASE_URL env var is required');
@@ -46,6 +49,9 @@ export const db = drizzle(client, {
     ...tractorsSchema,
     ...mechHireRequestsSchema,
     ...mechDeploymentsSchema,
+    ...commodityPricesSchema,
+    ...loanReceiptPledgesSchema,
+    ...shopsSchema,
   },
 });
 

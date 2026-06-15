@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { eq, desc, and, sql } from 'drizzle-orm';
+import { eq, desc, and, sql, inArray } from 'drizzle-orm';
 import { db } from '../../db';
 import { inventorySalesTable } from '../../db/schemas/inventorySalesSchema';
 import { commodityIntakesTable } from '../../db/schemas/commodityIntakesSchema';
@@ -17,15 +17,20 @@ export const getInventoryOverview = async (req: Request, res: Response) => {
 
     const intakeRows = await db
       .select({
-        centreId:   commodityIntakesTable.centreId,
-        centreName: commodityIntakesTable.centreName,
-        commodity:  commodityIntakesTable.commodity,
-        totalReceived: sql<number>`sum(${commodityIntakesTable.quantityKg})`,
-        intakeCount:   sql<number>`count(*)`,
+        centreId:        commodityIntakesTable.centreId,
+        centreName:      commodityIntakesTable.centreName,
+        commodity:       commodityIntakesTable.commodity,
+        transactionType: commodityIntakesTable.transactionType,
+        totalKg:         sql<number>`sum(${commodityIntakesTable.quantityKg})`,
+        intakeCount:     sql<number>`count(*)`,
       })
       .from(commodityIntakesTable)
       .where(whereClause)
-      .groupBy(commodityIntakesTable.centreId, commodityIntakesTable.commodity);
+      .groupBy(
+        commodityIntakesTable.centreId,
+        commodityIntakesTable.commodity,
+        commodityIntakesTable.transactionType,
+      );
 
     const salesWhere = centreId ? eq(inventorySalesTable.centreId, centreId) : undefined;
 
@@ -44,17 +49,35 @@ export const getInventoryOverview = async (req: Request, res: Response) => {
       salesMap.set(`${s.centreId}:${s.commodity}`, Number(s.totalSold));
     }
 
-    const overview = intakeRows.map(row => {
-      const totalReceived = Number(row.totalReceived);
-      const totalSold     = salesMap.get(`${row.centreId}:${row.commodity}`) ?? 0;
+    // Merge rows: group by centreId+commodity, split by transactionType
+    const merged = new Map<string, {
+      centreId: number; centreName: string; commodity: string;
+      tradeKg: number; storageKg: number; intakeCount: number;
+    }>();
+
+    for (const row of intakeRows) {
+      const key = `${row.centreId}:${row.commodity}`;
+      if (!merged.has(key)) {
+        merged.set(key, { centreId: row.centreId, centreName: row.centreName, commodity: row.commodity, tradeKg: 0, storageKg: 0, intakeCount: 0 });
+      }
+      const entry = merged.get(key)!;
+      entry.intakeCount += Number(row.intakeCount);
+      if (row.transactionType === 'storage') entry.storageKg += Number(row.totalKg);
+      else entry.tradeKg += Number(row.totalKg);
+    }
+
+    const overview = Array.from(merged.values()).map(entry => {
+      const totalSold = salesMap.get(`${entry.centreId}:${entry.commodity}`) ?? 0;
       return {
-        centreId:      row.centreId,
-        centreName:    row.centreName,
-        commodity:     row.commodity,
-        totalReceivedKg: totalReceived,
+        centreId:        entry.centreId,
+        centreName:      entry.centreName,
+        commodity:       entry.commodity,
+        totalTradeKg:    entry.tradeKg,
+        totalStorageKg:  entry.storageKg,
+        totalReceivedKg: entry.tradeKg + entry.storageKg,
         totalSoldKg:     totalSold,
-        availableKg:     totalReceived - totalSold,
-        intakeCount:   Number(row.intakeCount),
+        availableKg:     entry.tradeKg - totalSold,   // only trade stock can be sold
+        intakeCount:     entry.intakeCount,
       };
     });
 
@@ -75,7 +98,10 @@ export const getIntakesWithStock = async (req: Request, res: Response) => {
     const intakes = await db
       .select()
       .from(commodityIntakesTable)
-      .where(eq(commodityIntakesTable.centreId, centreId))
+      .where(and(
+        eq(commodityIntakesTable.centreId, centreId),
+        eq(commodityIntakesTable.transactionType, 'trade'),
+      ))
       .orderBy(desc(commodityIntakesTable.createdAt));
 
     const soldRows = await db

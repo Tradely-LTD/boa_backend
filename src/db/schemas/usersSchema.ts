@@ -7,8 +7,11 @@ export const usersTable = boaSchema.table('users', {
   email:        text('email').notNull().unique(),
   passwordHash: text('password_hash').notNull(),
   name:         text('name').notNull(),
-  role:         text('role', { enum: ['admin', 'super_admin', 'centre_manager', 'collector'] }).notNull().default('admin'),
+  role:         text('role', {
+    enum: ['admin', 'super_admin', 'centre_manager', 'collector', 'shop_owner', 'sales_rep'],
+  }).notNull().default('admin'),
   centreId:     integer('centre_id'),
+  shopId:       integer('shop_id'),  // set for shop_owner and sales_rep
   isActive:     boolean('is_active').notNull().default(true),
   createdAt:    text('created_at').notNull().default(sql`now()`),
   updatedAt:    text('updated_at').notNull().default(sql`now()`),

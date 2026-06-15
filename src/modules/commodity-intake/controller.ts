@@ -75,6 +75,8 @@ export const createIntake = async (req: Request, res: Response) => {
 
     const {
       commodity, quantityKg, gradeQuality,
+      transactionType,
+      qualitySpecs,
       farmerName, farmerPhone, farmerNin,
       sourceState, sourceLga,
       sourceType, supplierId, supplierName,
@@ -84,24 +86,28 @@ export const createIntake = async (req: Request, res: Response) => {
     if (!commodity || !quantityKg)
       return res.status(400).json({ success: false, message: 'Commodity and quantity are required.' });
 
+    const specsJson = qualitySpecs ? JSON.stringify(qualitySpecs) : '{}';
+
     const [row] = await db.insert(commodityIntakesTable).values({
-      refId:        genRef(),
+      refId:           genRef(),
       centreId,
-      centreName:   centre.centreName,
+      centreName:      centre.centreName,
       commodity,
-      quantityKg:   parseFloat(quantityKg),
-      gradeQuality: gradeQuality  ?? null,
-      sourceType:   sourceType    ?? 'farmer',
-      supplierId:   supplierId    ? parseInt(supplierId) : null,
-      supplierName: supplierName  ?? null,
-      farmerName:   farmerName    ?? null,
-      farmerPhone:  farmerPhone   ?? null,
-      farmerNin:    farmerNin     ?? null,
-      sourceState:  sourceState   ?? null,
-      sourceLga:    sourceLga     ?? null,
-      notes:        notes         ?? null,
-      loggedBy:     user.userId,
-      createdAt:    new Date().toISOString(),
+      quantityKg:      parseFloat(quantityKg),
+      gradeQuality:    gradeQuality     ?? null,
+      transactionType: transactionType  ?? 'trade',
+      qualitySpecs:    specsJson,
+      sourceType:      sourceType       ?? 'farmer',
+      supplierId:      supplierId       ? parseInt(supplierId) : null,
+      supplierName:    supplierName     ?? null,
+      farmerName:      farmerName       ?? null,
+      farmerPhone:     farmerPhone      ?? null,
+      farmerNin:       farmerNin        ?? null,
+      sourceState:     sourceState      ?? null,
+      sourceLga:       sourceLga        ?? null,
+      notes:           notes            ?? null,
+      loggedBy:        user.userId,
+      createdAt:       new Date().toISOString(),
     }).returning();
 
     return res.status(201).json({ success: true, data: row });

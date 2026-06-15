@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
-import { eq, desc, and, sql, SQL } from 'drizzle-orm';
+import { eq, desc, and, sql, SQL, inArray } from 'drizzle-orm';
 import { db } from '../../db';
 import { loanApplicationsTable } from '../../db/schemas/loanApplicationsSchema';
+import { loanReceiptPledgesTable } from '../../db/schemas/loanReceiptPledgesSchema';
 import { warehouseReceiptsTable } from '../../db/schemas/warehouseReceiptsSchema';
 import type { JwtPayload } from '../auth/types';
 
@@ -36,12 +37,23 @@ export const listLoans = async (req: Request, res: Response) => {
       .limit(limit)
       .offset(offset);
 
+    // Attach pledged receipts to each loan
+    const loanIds = rows.map(r => r.id);
+    const pledges = loanIds.length
+      ? await db.select().from(loanReceiptPledgesTable).where(inArray(loanReceiptPledgesTable.loanId, loanIds))
+      : [];
+
+    const pledgeMap = new Map<number, typeof pledges>();
+    for (const p of pledges) {
+      if (!pledgeMap.has(p.loanId)) pledgeMap.set(p.loanId, []);
+      pledgeMap.get(p.loanId)!.push(p);
+    }
+
+    const data = rows.map(r => ({ ...r, pledgedReceipts: pledgeMap.get(r.id) ?? [] }));
+
     return res.json({
-      success: true,
-      data: rows,
-      total: Number(total),
-      page,
-      limit,
+      success: true, data,
+      total: Number(total), page, limit,
       totalPages: Math.ceil(Number(total) / limit),
     });
   } catch {
@@ -57,68 +69,100 @@ export const getLoan = async (req: Request<{ id: string }>, res: Response) => {
       .from(loanApplicationsTable)
       .where(eq(loanApplicationsTable.id, parseInt(req.params.id)));
     if (!row) return res.status(404).json({ success: false, message: 'Loan application not found.' });
-    return res.json({ success: true, data: row });
+
+    const pledges = await db
+      .select()
+      .from(loanReceiptPledgesTable)
+      .where(eq(loanReceiptPledgesTable.loanId, row.id));
+
+    return res.json({ success: true, data: { ...row, pledgedReceipts: pledges } });
   } catch {
     return res.status(500).json({ success: false, message: 'Internal server error.' });
   }
 };
 
-// POST /api/loan-applications — creates loan and pledges the receipt
+// POST /api/loan-applications
+// Body: { receiptNumbers: string[], loanAmountRequested, farmerPhone?, farmerNin?, interestRate?, repaymentPeriodMonths?, reviewNotes? }
 export const createLoan = async (req: Request, res: Response) => {
   try {
     const {
-      receiptNumber, loanAmountRequested,
+      receiptNumbers,   // string[] — one or more AHR numbers
+      loanAmountRequested,
       farmerPhone, farmerNin,
       interestRate, repaymentPeriodMonths, reviewNotes,
     } = req.body;
 
-    if (!receiptNumber || !loanAmountRequested)
-      return res.status(400).json({ success: false, message: 'Receipt number and loan amount are required.' });
+    if (!receiptNumbers?.length || !loanAmountRequested)
+      return res.status(400).json({ success: false, message: 'At least one receipt number and loan amount are required.' });
 
-    // Look up the receipt
-    const [receipt] = await db
+    const numbers: string[] = (Array.isArray(receiptNumbers) ? receiptNumbers : [receiptNumbers])
+      .map((n: string) => n.toUpperCase());
+
+    // Fetch all receipts
+    const receipts = await db
       .select()
       .from(warehouseReceiptsTable)
-      .where(eq(warehouseReceiptsTable.receiptNumber, receiptNumber.toUpperCase()));
+      .where(inArray(warehouseReceiptsTable.receiptNumber, numbers));
 
-    if (!receipt)
-      return res.status(404).json({ success: false, message: 'Receipt not found.' });
+    if (receipts.length !== numbers.length) {
+      const found = receipts.map(r => r.receiptNumber);
+      const missing = numbers.filter(n => !found.includes(n));
+      return res.status(404).json({ success: false, message: `Receipt(s) not found: ${missing.join(', ')}` });
+    }
 
-    if (receipt.status !== 'active')
-      return res.status(400).json({
-        success: false,
-        message: `Receipt is ${receipt.status} — only active receipts can be pledged as collateral.`,
-      });
+    for (const r of receipts) {
+      if (r.status !== 'active')
+        return res.status(400).json({
+          success: false,
+          message: `Receipt ${r.receiptNumber} is ${r.status} — only active receipts can be pledged.`,
+        });
+    }
 
+    const primary = receipts[0];
+    const totalQty = receipts.reduce((s, r) => s + r.quantityKg, 0);
     const now = new Date().toISOString();
 
-    // Create loan application
+    // Create loan
     const [loan] = await db.insert(loanApplicationsTable).values({
       refId:                 genRefId(),
-      receiptId:             receipt.id,
-      receiptNumber:         receipt.receiptNumber,
-      centreId:              receipt.centreId,
-      centreName:            receipt.centreName,
-      commodity:             receipt.commodity,
-      quantityKg:            receipt.quantityKg,
-      farmerName:            receipt.farmerName,
-      farmerPhone:           farmerPhone ?? receipt.farmerPhone ?? null,
-      farmerNin:             farmerNin   ?? receipt.farmerNin   ?? null,
+      receiptId:             primary.id,
+      receiptNumber:         primary.receiptNumber,
+      receiptCount:          receipts.length,
+      centreId:              primary.centreId,
+      centreName:            primary.centreName,
+      commodity:             primary.commodity,
+      quantityKg:            totalQty,
+      farmerName:            primary.farmerName,
+      farmerPhone:           farmerPhone ?? primary.farmerPhone ?? null,
+      farmerNin:             farmerNin   ?? primary.farmerNin   ?? null,
       loanAmountRequested:   parseFloat(loanAmountRequested),
-      interestRate:          interestRate            ? parseFloat(interestRate)           : null,
-      repaymentPeriodMonths: repaymentPeriodMonths   ? parseInt(repaymentPeriodMonths)    : null,
+      interestRate:          interestRate          ? parseFloat(interestRate)          : null,
+      repaymentPeriodMonths: repaymentPeriodMonths ? parseInt(repaymentPeriodMonths)   : null,
       reviewNotes:           reviewNotes ?? null,
       status:                'pending',
       createdAt:             now,
     }).returning();
 
-    // Pledge the receipt — lock it against double-collateralisation
+    // Insert pledge rows for ALL receipts
+    await db.insert(loanReceiptPledgesTable).values(
+      receipts.map(r => ({
+        loanId:        loan.id,
+        receiptId:     r.id,
+        receiptNumber: r.receiptNumber,
+        commodity:     r.commodity,
+        quantityKg:    r.quantityKg,
+        createdAt:     now,
+      }))
+    );
+
+    // Pledge all receipts
     await db
       .update(warehouseReceiptsTable)
       .set({ status: 'pledged' })
-      .where(eq(warehouseReceiptsTable.id, receipt.id));
+      .where(inArray(warehouseReceiptsTable.id, receipts.map(r => r.id)));
 
-    return res.status(201).json({ success: true, data: loan });
+    const pledges = await db.select().from(loanReceiptPledgesTable).where(eq(loanReceiptPledgesTable.loanId, loan.id));
+    return res.status(201).json({ success: true, data: { ...loan, pledgedReceipts: pledges } });
   } catch {
     return res.status(500).json({ success: false, message: 'Internal server error.' });
   }
@@ -127,60 +171,84 @@ export const createLoan = async (req: Request, res: Response) => {
 // POST /api/loan-applications/public — unauthenticated farmer self-service
 export const createLoanPublic = async (req: Request, res: Response) => {
   try {
-    const { receiptNumber, loanAmountRequested, farmerPhone, farmerNin } = req.body;
+    const { receiptNumbers, receiptNumber: singleReceipt, loanAmountRequested, farmerPhone, farmerNin } = req.body;
 
-    if (!receiptNumber || !loanAmountRequested)
+    const numbers: string[] = (
+      Array.isArray(receiptNumbers) ? receiptNumbers :
+      receiptNumbers ? [receiptNumbers] :
+      singleReceipt ? [singleReceipt] : []
+    ).map((n: string) => n.toUpperCase());
+
+    if (!numbers.length || !loanAmountRequested)
       return res.status(400).json({ success: false, message: 'Receipt number and loan amount are required.' });
 
-    const [receipt] = await db
+    const receipts = await db
       .select()
       .from(warehouseReceiptsTable)
-      .where(eq(warehouseReceiptsTable.receiptNumber, receiptNumber.toUpperCase()));
+      .where(inArray(warehouseReceiptsTable.receiptNumber, numbers));
 
-    if (!receipt)
-      return res.status(404).json({ success: false, message: 'Receipt not found. Please check the number and try again.' });
+    if (receipts.length !== numbers.length) {
+      const found = receipts.map(r => r.receiptNumber);
+      const missing = numbers.filter(n => !found.includes(n));
+      return res.status(404).json({ success: false, message: `Receipt(s) not found: ${missing.join(', ')}. Please check the numbers and try again.` });
+    }
 
-    if (receipt.status === 'pledged')
-      return res.status(400).json({ success: false, message: 'This receipt is already pledged as collateral for an existing loan.' });
+    for (const r of receipts) {
+      if (r.status === 'pledged')
+        return res.status(400).json({ success: false, message: `Receipt ${r.receiptNumber} is already pledged as collateral for an existing loan.` });
+      if (r.status !== 'active')
+        return res.status(400).json({ success: false, message: `Receipt ${r.receiptNumber} is ${r.status} and cannot be used as collateral.` });
+    }
 
-    if (receipt.status !== 'active')
-      return res.status(400).json({ success: false, message: `This receipt is ${receipt.status} and cannot be used as collateral.` });
-
+    const primary  = receipts[0];
+    const totalQty = receipts.reduce((s, r) => s + r.quantityKg, 0);
     const now = new Date().toISOString();
 
     const [loan] = await db.insert(loanApplicationsTable).values({
       refId:               genRefId(),
-      receiptId:           receipt.id,
-      receiptNumber:       receipt.receiptNumber,
-      centreId:            receipt.centreId,
-      centreName:          receipt.centreName,
-      commodity:           receipt.commodity,
-      quantityKg:          receipt.quantityKg,
-      farmerName:          receipt.farmerName,
-      farmerPhone:         farmerPhone ?? receipt.farmerPhone ?? null,
-      farmerNin:           farmerNin   ?? receipt.farmerNin   ?? null,
+      receiptId:           primary.id,
+      receiptNumber:       primary.receiptNumber,
+      receiptCount:        receipts.length,
+      centreId:            primary.centreId,
+      centreName:          primary.centreName,
+      commodity:           primary.commodity,
+      quantityKg:          totalQty,
+      farmerName:          primary.farmerName,
+      farmerPhone:         farmerPhone ?? primary.farmerPhone ?? null,
+      farmerNin:           farmerNin   ?? primary.farmerNin   ?? null,
       loanAmountRequested: parseFloat(loanAmountRequested),
       status:              'pending',
       createdAt:           now,
     }).returning();
 
+    await db.insert(loanReceiptPledgesTable).values(
+      receipts.map(r => ({
+        loanId:        loan.id,
+        receiptId:     r.id,
+        receiptNumber: r.receiptNumber,
+        commodity:     r.commodity,
+        quantityKg:    r.quantityKg,
+        createdAt:     now,
+      }))
+    );
+
     await db
       .update(warehouseReceiptsTable)
       .set({ status: 'pledged' })
-      .where(eq(warehouseReceiptsTable.id, receipt.id));
+      .where(inArray(warehouseReceiptsTable.id, receipts.map(r => r.id)));
 
     return res.status(201).json({
       success: true,
       data: {
-        refId:         loan.refId,
-        farmerName:    loan.farmerName,
-        commodity:     loan.commodity,
-        quantityKg:    loan.quantityKg,
-        centreName:    loan.centreName,
-        receiptNumber: loan.receiptNumber,
+        refId:               loan.refId,
+        farmerName:          loan.farmerName,
+        commodity:           loan.commodity,
+        quantityKg:          loan.quantityKg,
+        receiptCount:        loan.receiptCount,
+        centreName:          loan.centreName,
         loanAmountRequested: loan.loanAmountRequested,
-        status:        loan.status,
-        createdAt:     loan.createdAt,
+        status:              loan.status,
+        createdAt:           loan.createdAt,
       },
     });
   } catch {
@@ -229,17 +297,24 @@ export const updateLoanStatus = async (req: Request<{ id: string }>, res: Respon
       .where(eq(loanApplicationsTable.id, parseInt(req.params.id)))
       .returning();
 
-    // Update receipt status based on loan outcome
+    // On repaid or rejected: release ALL pledged receipts
     if (status === 'rejected' || status === 'repaid') {
-      // Release the pledge — receipt becomes active again
-      await db
-        .update(warehouseReceiptsTable)
-        .set({ status: 'active' })
-        .where(eq(warehouseReceiptsTable.id, existing.receiptId));
-    }
-    // defaulted → receipt stays pledged (BOA may take possession of goods)
+      const pledges = await db
+        .select()
+        .from(loanReceiptPledgesTable)
+        .where(eq(loanReceiptPledgesTable.loanId, existing.id));
 
-    return res.json({ success: true, data: updated });
+      const receiptIds = pledges.map(p => p.receiptId);
+      if (receiptIds.length) {
+        await db
+          .update(warehouseReceiptsTable)
+          .set({ status: 'active' })
+          .where(inArray(warehouseReceiptsTable.id, receiptIds));
+      }
+    }
+
+    const pledges = await db.select().from(loanReceiptPledgesTable).where(eq(loanReceiptPledgesTable.loanId, existing.id));
+    return res.json({ success: true, data: { ...updated, pledgedReceipts: pledges } });
   } catch {
     return res.status(500).json({ success: false, message: 'Internal server error.' });
   }
